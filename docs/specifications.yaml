@@ -1,0 +1,447 @@
+openapi: 3.0.4
+info:
+  title: Carton Caps Referral API
+  description: |-
+    This is a mock project as a part of a larger Carton Caps hypothetical app. This REST API document outlines the full specifications of the new referral feature that will enable existing users to:
+    - create, share and track statuses of referrals
+    - validate referral codes and pre-populate into the onboarding flow for the referee
+    
+    For the sake of this project, we are assuming there is an existing API that will handle:
+    - User authentication.
+    - User profile details that include the current user's referral code.
+    - New user registration.
+    - Referral redemption as part of new user registration
+
+    <b>Backend Team Notes:</b>
+    - Assuming the team has ownership over the existing user registration process, the `/user` POST endpoint will need to be updated to include the referral redemption process. Ideally the `/user` POST API request can be updated to handle the referral validation and redemption process so that the frontend team just needs to add the device identifier and referral code to the request body.
+    - A new database table will need to be created for the referral records. These records will get created when the referring user creates a new "share link" and upserted when the referee registers using the referral link. The new database table will need a unique constraint on the device identifier to ensure that a single device cannot redeem a referral code multiple times. See the "ReferralObject" schema for the expected data structure.
+    - The generated referral deep link will contain the referral code, channel parameter, and path parameters within the link itself, not as query parameters. This is to ensure the path and referral code is not lost in the app open event on iOS/Android.
+
+    <b>Frontend Team Notes:</b>
+    - For the updated user registration process, a device identifier will need to be collected from the device and passed to the API. The iOS and Android apps will have a different implementation of the device identifier. (See <a href="https://developer.apple.com/documentation/devicecheck/dcdevice" target="_blank">DCDevice</a> for iOS and <a href="https://developer.android.com/identity/app-set-id#add-sdk" target="_blank">App Set ID</a> for Android implementation).
+    - The deep link will resolve to `cartoncapsapp://signup?referralCode={referralCode}`
+    - For new installs via referral: 
+      1. User clicks link and is redirected to App Store/Play Store/App Store for iOS/Google Play for Android
+      2. After install, deeplink provider triggers app open with original URL (`/signup?referralCode={referralCode}`)
+      3. App should check for referralCode parameter on launch and route to the signup page with the referral code pre-filled in the form.
+    - If the backend team is unable to update the `/user` POST API, use the `referral/validate` endpoint to validate the referral code has not already been used with this device ID before submitting the request to the `/user` POST API. 
+
+  version: 0.1.0
+  contact:
+    name: Spencer Grimes
+    email: spencerlgrimes@gmail.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Local server for testing
+  - url: http://api.example.com/v1
+    description: If we were creating a production service, this is where we would outline the diffferent available production or preview servers for testing
+  - url: http://staging-api.example.com
+    description: Example server description, e.g. Internal staging server for testing
+tags:
+  - name: Referral
+    description: Creating, viewing, and validating referrals
+  - name: User
+    description: Creating, updating, deleting, and reading user profile details. 
+    
+      Some of these endpoints are assumed to be part of an existing API, but updates will be required. 
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The API key to authenticate requests to the API. This is likely a JWT token created using the existing auth service. For testing you can use 'test-token'.
+  schemas:
+    ErrorObject:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: The integer error code
+        message:
+          type: string
+          description: The error message
+    InsertUserObject:
+      type: object
+      properties:
+        firstName:
+          type: string
+          description: The first name of the user
+          example: 'Ron'
+          minLength: 2
+          maxLength: 25
+        lastName:
+          type: string
+          description: The last name of the user
+          example: 'Weasley'
+          minLength: 2
+          maxLength: 25
+        birthday:
+          type: string
+          format: date
+          example: '1991-01-01'
+          description: The birthday of the user in YYYY-MM-DD format
+        referralCode:
+              $ref: '#/components/schemas/ReferralCode'
+    TimestampProperties:
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+          example: '2025-01-01T00:00:00Z'
+          description: The date and time the object was created
+        updatedAt:
+          type: string
+          format: date-time
+          example: '2025-01-01T00:00:00Z'
+          description: The date and time the object was last updated
+    OffsetResponseProperties:
+      type: object
+      properties:
+        total:
+          type: integer
+          format: int32
+          minimum: 0
+          example: 1
+          description: The total count of records matching the query. 
+        hasMore:
+          type: boolean
+          default: false
+          example: false
+          description: Whether there are more records to return
+    ReferralCode: 
+      type: string
+      pattern: ^[A-Z0-9]{6}$
+      example: 'EJD123'
+      minLength: 6
+      maxLength: 6
+      description: The referral code, unique identifier for the referral object. 
+    ReferralObject: # this object isn't used in the API spec, but included for example of what the data structure should look like
+      type: object
+      description: A referral object representing the relationship between a referral code, the referring user and the referred user.  <br><br>By making this a separate object, we can easily join with the InsertUserObject to get the full details of the relationship <br><br>This object is not used in the API spec, but included for example of what the data structure should look like
+      required:
+        - referralCode
+        - referringUserId
+      properties:
+        referralCode:
+          $ref: '#/components/schemas/ReferralCode'
+        referredUserId:
+          type: string
+          pattern: ^[a-f0-9]{16}$
+          description: The user id of the user who was referred by the referring user. This is optional because the referred user may not be registered yet.
+          example: '9b65685504a33690'
+        referringUserId:
+          type: string
+          pattern: ^[a-f0-9]{16}$
+          description: The user id of the user who created the referral
+          example: 'ae05e288f60d421a'
+        deviceIdentifier:
+          type: string
+          description: The device identifier of the device that redeemed the referral code. This is optional because the device identifier may not be available yet.
+          example: 'iOS-DCDevice-ABC123'
+        status:
+          type: string
+          description: The status of the referral. Records with status 'completed' must have deviceIdentifier and referredUserId properties populated.
+          enum:
+            - pending
+            - completed # completed objects must have deviceIdentifier and referredUserId properties populated
+            - expired # this status isn't currently used, but is included for future extensibility
+        createdAt:
+          type: string
+          format: date-time
+          description: The date and time the referral was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: The date and time the referral was last updated
+    ReferralListItemObject:
+      type: object
+      properties:
+        referredUserId:
+          type: string
+          description: The user id of the user who was referred by the referring user
+          example: '9b65685504a33690'
+        firstName: 
+          type: string
+          description: The first name of the referred user
+          example: 'Hermonie'
+        lastInitial:
+          type: string
+          description: The last initial of the referred user
+          example: 'G'
+        status:
+          type: string
+          description: The status of the referral
+          example: 'completed'
+          enum:
+            - pending
+            - completed
+            - expired # this status isn't currently used in this spec, but is included for future extensibility
+        referralCode:
+            $ref: '#/components/schemas/ReferralCode'
+  parameters: 
+    offsetParameter:
+      name: offset
+      in: query
+      description: The number of records skipped before returning the results
+      required: false
+      schema:
+        type: integer
+        format: int32
+        minimum: 0
+        default: 0
+    limitParameter:
+      name: limit
+      in: query
+      description: The maximum number of records to return. Default is 10, maximum is 100.
+      required: false
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100
+        default: 10
+  responses: 
+    404NotFound:
+      description: This resource was not found
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorObject'
+              - properties:
+                  code:
+                    example: 404
+                  message:
+                    example: 'This resource was not found'
+    400BadRequest:
+      description: The request was invalid
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorObject'
+              - properties:
+                  code: 
+                    example: 400
+                  message:
+                    example: 'The request was invalid'
+    401Unauthorized:
+      description: The request was unauthorized
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorObject'
+              - properties:
+                  code:
+                    example: 401
+                  message:
+                    example: 'The request was unauthorized'
+    500InternalServerError:
+      description: An internal server error occurred
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/ErrorObject'
+              - properties:
+                  code:
+                    example: 500
+                  message:
+                    example: 'An internal server error occurred'
+paths:
+  /user:
+    get: 
+      security:
+        - bearerAuth: []
+      tags: [User]
+      summary: Get user details - EXISTING API (only for reference). 
+      description: Returns the user's profile details including the referral code.
+      responses: 
+        "200": #success
+          description: Expected response, a JSON object of the user's profile details
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - properties:
+                      id:
+                        type: string
+                        description: The unique identifier of the user
+                  - $ref: '#/components/schemas/InsertUserObject'
+                  - $ref: '#/components/schemas/TimestampProperties'
+                  
+        "404":
+          $ref: '#/components/responses/404NotFound'
+        "400":
+          $ref: '#/components/responses/400BadRequest'
+        "401":
+          $ref: '#/components/responses/401Unauthorized'
+        "500":
+          $ref: '#/components/responses/500InternalServerError'
+    post: 
+      tags: [User]
+      summary: Create a new user - UPDATE THIS EXISTING API
+      description: Creates a new registered user, handling the referral redemption in existing API. Returns the user's profile details including the referral code. <br><br><b>Implementation Team Note:</b> this endpoint will need to be updated to include the referral redemption process in the existing API. It is necessary that a unique device identifier (e.g. device token or device id) is included in the user registration data to ensure that a single device cannot redeem a referral code multiple times. (See DCDevice for iOS and App Set ID Android implementation). The referral database record will need a unique constraint on the device identifier to ensure that a single device cannot redeem a referral code multiple times.
+      requestBody:
+        required: true
+        description: The user registration data, now including the device identifier and referral code.
+        content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InsertUserObject'
+      responses: 
+        "200": #success
+          description: Expected response, a JSON object of the user's profile details including the referral code. This confirms the expected data was successfully created in the database.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - properties:
+                      id:
+                        type: string
+                        description: The unique identifier of the user
+                  - $ref: '#/components/schemas/InsertUserObject'
+                  - $ref: '#/components/schemas/TimestampProperties'
+        "404":
+          $ref: '#/components/responses/404NotFound'
+        "400":
+          $ref: '#/components/responses/400BadRequest'
+        "401":
+          $ref: '#/components/responses/401Unauthorized'
+        "500":
+          $ref: '#/components/responses/500InternalServerError'
+  /user/{userId}/referrals/list:
+    get:
+      security:
+        - bearerAuth: []
+      tags: [User]
+      summary: Get a list of referrals for a user
+      description: Returns an array of user details that have been referred by a given user. Includes the referred user's id, first name, last initial, status, and referral code for convenience. <p>The referredUserId is the user id of the user who was referred by the referring user, and is used to join with the InsertUserObject to get the full details of the relationship.</p> <br><br>User must have access to the referring user's profile to view the list of referrals.
+      parameters:
+        - in: path
+          name: userId
+          example: 'ae05e288f60d421a'
+          required: true
+          schema:
+            type: string
+          description: The user id of the user to get the referral list for
+        - in: query
+          name: status
+          example: 'completed'
+          required: false
+          schema:
+            type: string
+          description: Optional status of the referrals to filter by
+        - $ref: '#/components/parameters/offsetParameter'
+        - $ref: '#/components/parameters/limitParameter'
+      responses:
+        "200": # status code
+          description: Expected response, a JSON array of referrals for a user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - properties:
+                      items:
+                        type: array
+                        items: 
+                          $ref: '#/components/schemas/ReferralListItemObject'
+                  - $ref: '#/components/schemas/OffsetResponseProperties'
+        "404":
+          $ref: '#/components/responses/404NotFound'
+        "400":
+          $ref: '#/components/responses/400BadRequest'
+        "401":
+          $ref: '#/components/responses/401Unauthorized'
+        "500":
+          $ref: '#/components/responses/500InternalServerError'
+  /referral/{referralCode}/link:
+    post:
+      security:
+        - bearerAuth: []
+      tags: [Referral]
+      summary: Create a new link for a referral code
+      description: Creates a deep link (using the deep link provider via an API) including the necessary metadata for tracking channel and utm parameters. <i>Note - this endpoint is best served by a deep link provider that supports metadata in the link, but it is not required.</i>
+       <p>Only one pending status referral record is allowed per referral code, channel and referring user. If a pending status referral record already exists for the given referral code, channel and referring user, the existing record will be returned. This is to enable the user to see an indication of pending referrals in the UI (i.e. they have generated a share link for SMS that has not yet been redeemed), without creating duplicate records from cliking the share button mutliple times.</p>
+       <br><br> <b> Implementation Team Note:</b> See README for more details on the deep link provider and future extensibility of this endpoint.
+       <br><br> <b> Note:</b> The referral link will include the referral code and channel properties deep linked into the path parameter, and referral code will not be included as a query parameter on the link. 
+       <br><br> <b> Note:</b> Users only have access to create share links for their own referral code.
+      parameters:
+        - in: path
+          name: referralCode
+          example: 'ABC123'
+          required: true
+          schema:
+            type: string
+          description: The referral code to create a link for
+        - in: query
+          name: channel
+          description: The sharing channel. This is an optional parameter that can be included in the deep link parameters if supported by the provider (see README).
+          required: false
+          example: 'email'
+          schema:
+            type: string
+            enum:
+              - email
+              - sms
+              - other # this is the default channel if no channel is provided
+      responses:
+        "200": # status code
+          description: A JSON object of the referral link
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  referralLink:
+                    type: string
+                    description: The referral link to be given to the user to share. This link will be used to track the referral and will include the necessary metadata for tracking channel and utm parameters.
+                    example: https://cartoncaps.link/afi7efhj90
+                    format: uri
+  /referral/validate:
+    post:
+      tags: [Referral]
+      summary: Validate a referral code (Optional)
+      description: Validates a referral code has not already been used with this device ID and returns the referral details. <br><br><b>Note:</b> Ideally this logic will be handled within the /user POST registration process. Only implement this endpoint if the /user POST API cannot be updated to include referral redemption logic.
+      requestBody:
+        required: true
+        description: The device identifier and referral code to validate. Values are case insensitive.
+        content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deviceIdentifier:
+                    type: string
+                  referralCode:
+                    type: string
+      responses:
+        "200": # status code
+          description: A JSON object of the referral details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  referralCode:
+                    type: string
+                  deviceIdentifier:
+                    type: string
+                  isValid:
+                    type: boolean
+                    description: True if the referral code is valid and has not already been used with this device ID
+        "404":
+          $ref: '#/components/responses/404NotFound'
+        "400":
+          $ref: '#/components/responses/400BadRequest'
+        "401":
+          $ref: '#/components/responses/401Unauthorized'
+        "500":
+          $ref: '#/components/responses/500InternalServerError'
